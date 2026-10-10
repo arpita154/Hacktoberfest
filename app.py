@@ -1,5 +1,8 @@
+import hashlib
 import json
 import os
+import sqlite3
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -14,33 +17,189 @@ st.set_page_config(page_title="AntiGPT", page_icon="🧠", layout="wide", initia
 st.markdown(ui.CSS, unsafe_allow_html=True)
 GEMMA = gemma_available()
 
-DB = "submissions.json"
+BASE_DIR = Path(__file__).resolve().parent
+DB = BASE_DIR / "antigpt.db"
+LEGACY_JSON = BASE_DIR / "submissions.json"
 BUTTON_LABELS = {"hint1": "Get Hint 1", "hint2": "Get Hint 2", "full": "Reveal Full Explanation"}
 
 
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.strip().encode("utf-8")).hexdigest()
+
+
+def init_db():
+    conn = sqlite3.connect(DB)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'student'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student TEXT NOT NULL,
+            assignment TEXT NOT NULL,
+            passed INTEGER NOT NULL,
+            total INTEGER NOT NULL,
+            errors TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+        ("admin", hash_password("admin123"), "admin"),
+    )
+    conn.commit()
+    conn.close()
+
+    if LEGACY_JSON.exists() and not _legacy_rows_loaded():
+        migrate_legacy_data()
+
+
+def _legacy_rows_loaded():
+    conn = sqlite3.connect(DB)
+    has_rows = conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0] > 0
+    conn.close()
+    return has_rows
+
+
+def migrate_legacy_data():
+    if not LEGACY_JSON.exists():
+        return
+    try:
+        rows = json.loads(LEGACY_JSON.read_text(encoding="utf-8"))
+        if not rows:
+            return
+        conn = sqlite3.connect(DB)
+        for row in rows:
+            conn.execute(
+                "INSERT INTO submissions (student, assignment, passed, total, errors) VALUES (?, ?, ?, ?, ?)",
+                (
+                    row.get("student", "Unknown"),
+                    row.get("assignment", "Unknown"),
+                    int(row.get("passed", 0)),
+                    int(row.get("total", 0)),
+                    json.dumps(row.get("errors", [])),
+                ),
+            )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def load():
-    return json.load(open(DB)) if os.path.exists(DB) else []
+    conn = sqlite3.connect(DB)
+    rows = conn.execute(
+        "SELECT student, assignment, passed, total, errors FROM submissions ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "student": student,
+            "assignment": assignment,
+            "passed": passed,
+            "total": total,
+            "errors": json.loads(errors) if errors else [],
+        }
+        for student, assignment, passed, total, errors in rows
+    ]
 
 
 def save(rows):
-    json.dump(rows, open(DB, "w"), indent=2)
+    conn = sqlite3.connect(DB)
+    conn.execute("DELETE FROM submissions")
+    for row in rows:
+        conn.execute(
+            "INSERT INTO submissions (student, assignment, passed, total, errors) VALUES (?, ?, ?, ?, ?)",
+            (
+                row.get("student", "Unknown"),
+                row.get("assignment", "Unknown"),
+                int(row.get("passed", 0)),
+                int(row.get("total", 0)),
+                json.dumps(row.get("errors", [])),
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def login_user(username: str, password: str):
+    if not username or not password:
+        return None
+    conn = sqlite3.connect(DB)
+    user = conn.execute(
+        "SELECT username, role FROM users WHERE username = ? AND password_hash = ?",
+        (username.strip(), hash_password(password)),
+    ).fetchone()
+    conn.close()
+    return {"username": user[0], "role": user[1]} if user else None
 
 
 def html(markup):
     st.markdown(markup, unsafe_allow_html=True)
 
 
+init_db()
 st.session_state.setdefault("student_name", "Demo Student")
 st.session_state.setdefault("hints", [])
 st.session_state.setdefault("hint_error", None)
+st.session_state.setdefault("authenticated", False)
+st.session_state.setdefault("user", None)
+
+
+# ------------------------------------------------------------------ auth
+
+def login_page():
+    st.title("AntiGPT")
+    st.subheader("Sign in")
+    st.caption("Use your demo account to access the practice and instructor pages.")
+    st.info("Demo login: username = admin, password = admin123")
+
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Login")
+
+    if submit:
+        user = login_user(username, password)
+        if user:
+            st.session_state.authenticated = True
+            st.session_state.user = user
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+
 
 # ------------------------------------------------------------------ sidebar
-with st.sidebar:
-    html(ui.sidebar_html(GEMMA))
-    st.write("")
-    page = st.radio("Navigation", ["Practice", "Instructor"], label_visibility="collapsed",
-                    format_func={"Practice": "💻  Practice", "Instructor": "📊  Instructor"}.get)
-    html(ui.SIDEBAR_FOOTER)
+
+def render_sidebar():
+    with st.sidebar:
+        html(ui.sidebar_html(GEMMA))
+        st.write("")
+        if st.session_state.get("authenticated"):
+            st.caption(f"Signed in as: {st.session_state.user['username']}")
+            if st.button("Logout"):
+                st.session_state.authenticated = False
+                st.session_state.user = None
+                st.rerun()
+        st.write("")
+        if st.session_state.get("authenticated"):
+            page = st.radio(
+                "Navigation",
+                ["Practice", "Instructor"],
+                label_visibility="collapsed",
+                format_func={"Practice": "💻  Practice", "Instructor": "📊  Instructor"}.get,
+            )
+        html(ui.SIDEBAR_FOOTER)
+        return page if st.session_state.get("authenticated") else None
 
 
 # ------------------------------------------------------------------ practice
@@ -94,9 +253,13 @@ def practice():
             st.session_state.hints = []
             st.session_state.hint_error = None
             rows = load()
-            rows.append({"student": st.session_state.student_name, "assignment": title,
-                         "passed": sum(r["passed"] for r in results), "total": len(results),
-                         "errors": [r["error"] or ("Wrong answer" if not r["passed"] else None) for r in results]})
+            rows.append({
+                "student": st.session_state.student_name,
+                "assignment": title,
+                "passed": sum(r["passed"] for r in results),
+                "total": len(results),
+                "errors": [r["error"] or ("Wrong answer" if not r["passed"] else None) for r in results],
+            })
             save(rows)
 
     run = st.session_state.get("run")
@@ -117,7 +280,7 @@ def practice():
 # ------------------------------------------------------------------ instructor
 def instructor():
     st.markdown("## Instructor")
-    st.caption("Demo view — this app has no login yet, so anyone using it can see this page.")
+    st.caption("Instructor dashboard for class-wide performance.")
     rows = load()
     if not rows:
         st.info("No submissions yet. Run some tests on the Practice page first.")
@@ -139,7 +302,11 @@ def instructor():
     st.dataframe(df[["student", "assignment", "passed", "total"]], width="stretch")
 
 
-if page == "Practice":
-    practice()
+if not st.session_state.get("authenticated"):
+    login_page()
 else:
-    instructor()
+    page = render_sidebar()
+    if page == "Practice":
+        practice()
+    elif page == "Instructor":
+        instructor()

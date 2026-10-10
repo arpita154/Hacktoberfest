@@ -1,40 +1,75 @@
 # AntiGPT
 
-**Feedback that teaches, not answers that cheat.** Built for the *Build for Your Campus* track (OpenLake × MLH Hack Day, IIT Bhilai — Build with Gemma 4).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Students submit Python code. AntiGPT runs it against **real test cases** and shows which pass or fail. **Gemma 4** then explains *why* a test failed — as a hint, a concept explanation, or detailed feedback — without handing over the solution. Instructors see class-wide scores and the most common mistakes.
+AntiGPT is an AI-powered feedback system for programming assignments. It evaluates student Python code against real test cases and gives helpful explanations without revealing the full solution. The goal is to make grading objective while keeping feedback educational and constructive.
 
-## Why
-Normal autograders say only "pass/fail". ChatGPT-style tools just give the answer. AntiGPT sits in between: the grade is objective, the feedback makes the student think.
+## Project Overview
 
-## How it works
-1. `grader.py` runs student code in a **separate Python process** with a 5-second timeout (infinite loops can't freeze the app) and compares the output with expected values. **This is the only thing that decides the score.**
-2. `feedback.py` sends the assignment, the code and the **real test results** to **Gemma 4** (`gemma-4-26b-a4b-it` via the Gemini API). The prompt forbids changing or inventing results.
-3. If Gemma is unavailable or no key is set, rule-based feedback is shown instead — the score is never affected.
-4. `app.py` (Streamlit) has a Student tab and an Instructor tab (submissions, average score, most common errors).
+This project was built for the Build for Your Campus track and focuses on the gap between strict auto-grading and generic AI answers. Instead of only saying “pass” or “fail,” AntiGPT explains what went wrong and nudges students toward the right idea.
 
-## Gemma 4 integration
-- Model: `gemma-4-26b-a4b-it`, hosted by Google AI Studio / Gemini API.
-- Called with a plain HTTPS request (`requests`) — key read from `.env`, never committed.
-- Help levels: `hint` (one guiding question, no code), `explain` (concept, no solution), `detailed` (small fix allowed).
+## Features
 
-## Run it
-```
+- Runs student code in a separate Python subprocess
+- Enforces a timeout to prevent infinite loops
+- Compares outputs against expected test cases
+- Shows pass/fail results for each test
+- Uses Gemini-powered feedback to explain mistakes
+- Provides three feedback modes: hint, explain, and detailed guidance
+- Includes an instructor dashboard with class statistics and common errors
+- Stores submissions locally in a JSON file for demo use
+
+## Tech Stack
+
+- Python
+- Streamlit
+- Gemini API / Google AI Studio
+- Requests
+- Python-dotenv
+- Pandas
+
+## How It Works
+
+1. The grader runs a student solution in an isolated Python process.
+2. The result is compared to the expected output for real test cases.
+3. The test outcome is sent to the AI model along with the assignment prompt and code.
+4. The model generates feedback that explains the error without giving the final answer.
+5. Instructors can view aggregated class performance and common mistakes.
+
+## Live Demo
+
+To run the application locally:
+
+```bash
 pip install -r requirements.txt
-# put your key in .env:  GEMINI_API_KEY=...
+# Add your Gemini API key in a .env file
+# GEMINI_API_KEY=your_key_here
 streamlit run app.py
 ```
 
-## Demo
-1. Student → "Average of a List" → Run tests → 3/4 (empty list → ZeroDivisionError).
-2. Help level *hint* → "Explain my mistake (Gemma 4)".
-3. Fix: `return sum(nums) / len(nums) if nums else 0` → 4/4.
-4. Instructor tab → class stats and common mistakes.
+If you deploy this project to Streamlit Cloud or another host, add your live URL here.
+
+## Example Workflow
+
+1. A student submits a Python solution.
+2. AntiGPT runs the code against hidden and visible test cases.
+3. The app shows which tests passed or failed.
+4. The student receives a hint or conceptual explanation.
+5. The instructor can track class performance and recurring mistakes.
+
+## Repository Details
+
+- Name: AntiGPT
+- Repository: https://github.com/arpita154/Hacktoberfest.git
+- Description: AI-powered programming feedback system for student submissions
+- License: MIT
 
 ## Limitations
-- The subprocess + timeout is not a full security sandbox; for real deployment run the grader inside Docker with no network.
-- Submissions are stored in a local JSON file; no login yet.
-- Python assignments only.
+
+- This is designed for Python assignments and is not a full sandboxed security environment.
+- Local JSON storage is used for demo purposes.
+- For production deployment, a more isolated runtime environment is recommended.
 
 ## License
-MIT
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
